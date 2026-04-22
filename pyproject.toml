@@ -1,0 +1,51 @@
+[project]
+name = "keyward"
+version = "0.0.1"
+description = "Local secret broker that keeps API keys out of files AI agents can read."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "sumedh" }]
+keywords = ["secrets", "api-keys", "security", "proxy", "ai-agents"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+]
+dependencies = [
+    "typer>=0.12",
+    "aiohttp>=3.9",
+    "keyring>=24.0",
+]
+
+[project.scripts]
+keyward = "keyward.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/sumedh/keyward"
+Repository = "https://github.com/sumedh/keyward"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/keyward"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
