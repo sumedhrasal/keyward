@@ -20,6 +20,9 @@ def config_file() -> Path:
     return config_dir() / "config.toml"
 
 
+AUTH_STYLES = ("bearer", "x-api-key")
+
+
 @dataclass
 class KeyEntry:
     name: str
@@ -27,6 +30,7 @@ class KeyEntry:
     endpoint: str
     env_vars: list[str] = field(default_factory=list)
     base_url_env: str | None = None
+    auth_style: str = "bearer"
     created: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -34,6 +38,7 @@ class KeyEntry:
             "token": self.token,
             "endpoint": self.endpoint,
             "env_vars": self.env_vars,
+            "auth_style": self.auth_style,
             "created": self.created,
         }
         if self.base_url_env:
@@ -48,6 +53,8 @@ class KeyEntry:
             endpoint=d["endpoint"],
             env_vars=list(d.get("env_vars", [])),
             base_url_env=d.get("base_url_env"),
+            # default to bearer for configs written before auth_style existed
+            auth_style=d.get("auth_style", "bearer"),
             created=d.get("created", ""),
         )
 
@@ -94,7 +101,10 @@ def add_key(
     endpoint: str,
     env_vars: list[str],
     base_url_env: str | None,
+    auth_style: str = "bearer",
 ) -> KeyEntry:
+    if auth_style not in AUTH_STYLES:
+        raise ValueError(f"auth_style must be one of {AUTH_STYLES}, got {auth_style!r}")
     if get_key(name) is not None:
         raise KeyError(f"key '{name}' already exists; use 'keyward rotate' to change its secret")
     keyring.set_password(KEYCHAIN_SERVICE, name, secret)
@@ -104,6 +114,7 @@ def add_key(
         endpoint=endpoint,
         env_vars=env_vars,
         base_url_env=base_url_env,
+        auth_style=auth_style,
         created=dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
     )
     data = _load_raw()

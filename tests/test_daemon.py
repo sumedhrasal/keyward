@@ -85,7 +85,7 @@ async def test_proxy_swaps_auth_and_forwards_body() -> None:
         return web.json_response({"ok": True})
 
     up_runner, up_base = await _make_upstream(upstream_handler)
-    cache = {"kw_abc123": ("openai", up_base, "sk-real-secret")}
+    cache = {"kw_abc123": ("openai", up_base, "sk-real-secret", "bearer")}
     daemon_runner, _, daemon_port = await _start_site(create_app(cache))
 
     try:
@@ -114,7 +114,7 @@ async def test_proxy_rejects_missing_bearer() -> None:
         return web.Response(text="should not reach upstream")
 
     up_runner, up_base = await _make_upstream(upstream_handler)
-    cache = {"kw_abc123": ("openai", up_base, "sk-real")}
+    cache = {"kw_abc123": ("openai", up_base, "sk-real", "bearer")}
     daemon_runner, _, daemon_port = await _start_site(create_app(cache))
 
     try:
@@ -162,7 +162,7 @@ async def test_proxy_streams_sse() -> None:
         return resp
 
     up_runner, up_base = await _make_upstream(upstream_handler)
-    cache = {"kw_stream": ("openai", up_base, "sk-real")}
+    cache = {"kw_stream": ("openai", up_base, "sk-real", "bearer")}
     daemon_runner, _, daemon_port = await _start_site(create_app(cache))
 
     try:
@@ -183,12 +183,75 @@ async def test_proxy_streams_sse() -> None:
 
 
 @pytest.mark.asyncio
+async def test_proxy_x_api_key_in_and_out() -> None:
+    seen = {}
+
+    async def upstream_handler(request: web.Request) -> web.Response:
+        seen["auth"] = request.headers.get("Authorization")
+        seen["x_api_key"] = request.headers.get("x-api-key")
+        return web.json_response({"ok": True})
+
+    up_runner, up_base = await _make_upstream(upstream_handler)
+    cache = {"kw_ant1": ("anthropic", up_base, "sk-ant-real", "x-api-key")}
+    daemon_runner, _, daemon_port = await _start_site(create_app(cache))
+
+    try:
+        async with ClientSession() as client:
+            async with client.post(
+                f"http://127.0.0.1:{daemon_port}/v1/messages",
+                headers={"x-api-key": "kw_ant1"},
+                json={"model": "claude-opus", "messages": []},
+            ) as resp:
+                assert resp.status == 200
+
+        # Real secret must have replaced the client's token in x-api-key,
+        # and Authorization must not leak any value (bearer style not used here).
+        assert seen["x_api_key"] == "sk-ant-real"
+        assert seen["auth"] is None
+    finally:
+        await daemon_runner.cleanup()
+        await up_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_proxy_bearer_incoming_x_api_key_entry() -> None:
+    """SDK might send Bearer while the upstream wants x-api-key.
+    The daemon should still accept the token and forward in the entry's style."""
+    seen = {}
+
+    async def upstream_handler(request: web.Request) -> web.Response:
+        seen["auth"] = request.headers.get("Authorization")
+        seen["x_api_key"] = request.headers.get("x-api-key")
+        return web.json_response({"ok": True})
+
+    up_runner, up_base = await _make_upstream(upstream_handler)
+    cache = {"kw_ant2": ("anthropic", up_base, "sk-ant-real", "x-api-key")}
+    daemon_runner, _, daemon_port = await _start_site(create_app(cache))
+
+    try:
+        async with ClientSession() as client:
+            async with client.post(
+                f"http://127.0.0.1:{daemon_port}/v1/messages",
+                headers={"Authorization": "Bearer kw_ant2"},
+                json={"model": "claude-opus"},
+            ) as resp:
+                assert resp.status == 200
+
+        assert seen["x_api_key"] == "sk-ant-real"
+        # Authorization should be stripped (not forwarded with the fake token).
+        assert seen["auth"] is None
+    finally:
+        await daemon_runner.cleanup()
+        await up_runner.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_proxy_forwards_upstream_error_status() -> None:
     async def upstream_handler(request: web.Request) -> web.Response:
         return web.json_response({"error": "invalid_api_key"}, status=401)
 
     up_runner, up_base = await _make_upstream(upstream_handler)
-    cache = {"kw_bad": ("openai", up_base, "sk-wrong")}
+    cache = {"kw_bad": ("openai", up_base, "sk-wrong", "bearer")}
     daemon_runner, _, daemon_port = await _start_site(create_app(cache))
 
     try:

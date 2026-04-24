@@ -15,12 +15,15 @@ from keyward.config import daemon_file, ensure_dirs
 
 logger = logging.getLogger("keyward.daemon")
 
-CACHE_KEY: web.AppKey[dict[str, tuple[str, str, str]]] = web.AppKey(
-    "cache", dict[str, tuple[str, str, str]]
+CacheEntry = tuple[str, str, str, str]  # (name, endpoint, secret, auth_style)
+
+CACHE_KEY: web.AppKey[dict[str, CacheEntry]] = web.AppKey(
+    "cache", dict[str, CacheEntry]
 )
 CLIENT_KEY: web.AppKey[ClientSession] = web.AppKey("client", ClientSession)
 
-# Hop-by-hop headers (RFC 2616) plus ones we rewrite ourselves.
+# Hop-by-hop headers (RFC 2616) plus auth headers we rewrite ourselves.
+# x-api-key is stripped so a client's fake token never reaches upstream.
 HOP_BY_HOP = {
     "connection",
     "keep-alive",
@@ -33,20 +36,35 @@ HOP_BY_HOP = {
     "content-length",
     "host",
     "authorization",
+    "x-api-key",
 }
 
 
-async def handle(request: web.Request) -> web.StreamResponse:
+def _extract_token(request: web.Request) -> str | None:
     auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        return web.Response(status=401, text="missing bearer token\n")
-    token = auth[len("Bearer "):].strip()
+    if auth.startswith("Bearer "):
+        candidate = auth[len("Bearer "):].strip()
+        if candidate.startswith("kw_"):
+            return candidate
+    candidate = request.headers.get("x-api-key", "").strip()
+    if candidate.startswith("kw_"):
+        return candidate
+    return None
+
+
+async def handle(request: web.Request) -> web.StreamResponse:
+    token = _extract_token(request)
+    if token is None:
+        return web.Response(
+            status=401,
+            text="missing keyward token (expected Authorization: Bearer kw_... or x-api-key: kw_...)\n",
+        )
 
     cache = request.app[CACHE_KEY]
     tup = cache.get(token)
     if tup is None:
         return web.Response(status=403, text="unknown token\n")
-    name, endpoint, secret = tup
+    name, endpoint, secret, auth_style = tup
 
     base = endpoint if "://" in endpoint else f"https://{endpoint}"
     target_url = f"{base}{request.path_qs}"
@@ -54,7 +72,10 @@ async def handle(request: web.Request) -> web.StreamResponse:
     out_headers = {
         k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP
     }
-    out_headers["Authorization"] = f"Bearer {secret}"
+    if auth_style == "x-api-key":
+        out_headers["x-api-key"] = secret
+    else:
+        out_headers["Authorization"] = f"Bearer {secret}"
 
     body = await request.read()
 
@@ -94,18 +115,18 @@ async def handle(request: web.Request) -> web.StreamResponse:
         return web.Response(status=502, text=f"upstream error: {e}\n")
 
 
-def build_cache() -> dict[str, tuple[str, str, str]]:
-    cache: dict[str, tuple[str, str, str]] = {}
+def build_cache() -> dict[str, CacheEntry]:
+    cache: dict[str, CacheEntry] = {}
     for entry in store.list_keys():
         s = store.read_secret(entry.name)
         if s is None:
             logger.warning("no keychain entry for '%s'; skipping", entry.name)
             continue
-        cache[entry.token] = (entry.name, entry.endpoint, s)
+        cache[entry.token] = (entry.name, entry.endpoint, s, entry.auth_style)
     return cache
 
 
-def create_app(cache: dict[str, tuple[str, str, str]]) -> web.Application:
+def create_app(cache: dict[str, CacheEntry]) -> web.Application:
     app = web.Application()
     app[CACHE_KEY] = cache
 

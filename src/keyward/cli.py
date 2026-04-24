@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import signal
 import subprocess
 import sys
@@ -9,7 +10,7 @@ import time
 
 import typer
 
-from keyward import __version__, store
+from keyward import __version__, agent, store
 from keyward.config import daemon_file, ensure_dirs
 
 app = typer.Typer(
@@ -36,12 +37,81 @@ def _root(
     pass
 
 
+def _live_daemon_info() -> dict | None:
+    """Return {host, port, pid} if a daemon is running and its PID is alive, else None."""
+    path = daemon_file()
+    if not path.exists():
+        return None
+    try:
+        info = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    pid = info.get("pid")
+    if not isinstance(pid, int):
+        return None
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return None
+    return info
+
+
+def _hint_restart_if_running() -> None:
+    if _live_daemon_info() is not None:
+        typer.echo("hint: a daemon is running. Run 'keyward restart' to reload the change.")
+
+
 @app.command()
-def init() -> None:
-    """Create config and state dirs. (LaunchAgent install lands in v0.2.)"""
+def init(
+    uninstall: bool = typer.Option(False, "--uninstall", help="Remove the login agent."),
+) -> None:
+    """Create config/state dirs and install the daemon as a login agent."""
     ensure_dirs()
+
+    if uninstall:
+        if platform.system() != "Darwin":
+            typer.echo("uninstalling a login agent is only wired up for macOS in v0.2", err=True)
+            raise typer.Exit(1)
+        removed = agent.uninstall()
+        typer.echo("removed LaunchAgent" if removed else "no LaunchAgent was installed")
+        return
+
     typer.echo(f"config dir ready: {daemon_file().parent}")
-    typer.echo("TODO: install LaunchAgent/systemd unit to pre-warm daemon at login")
+
+    system = platform.system()
+    if system == "Darwin":
+        try:
+            path = agent.install(sys.executable)
+        except RuntimeError as e:
+            typer.echo(f"error: {e}", err=True)
+            raise typer.Exit(1) from None
+        typer.echo(f"installed LaunchAgent at {path}")
+        typer.echo("daemon will start at login (and is running now).")
+    elif system == "Linux":
+        typer.echo("TODO: systemd user-unit install (Linux) lands in v0.2.1")
+    elif system == "Windows":
+        typer.echo("TODO: scheduled-task install (Windows) lands in v0.2.1")
+    else:
+        typer.echo(f"unsupported platform: {system}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def restart() -> None:
+    """Restart the daemon to reload config and refresh the secret cache."""
+    if platform.system() == "Darwin" and agent.is_installed():
+        agent.restart()
+        typer.echo("kickstarted LaunchAgent daemon")
+        return
+    info = _live_daemon_info()
+    if info is None:
+        typer.echo("no daemon is running")
+        return
+    try:
+        os.kill(info["pid"], signal.SIGTERM)
+        typer.echo("sent SIGTERM to ephemeral daemon; next 'keyward run' will start a fresh one")
+    except ProcessLookupError:
+        typer.echo("daemon not running")
 
 
 @app.command()
@@ -56,22 +126,33 @@ def add(
         None, "--base-url-env",
         help="Env var for the base URL pointing at the daemon. Defaults to <NAME>_BASE_URL.",
     ),
+    auth_style: str = typer.Option(
+        "bearer", "--auth-style",
+        help="Upstream auth style: 'bearer' (OpenAI-style) or 'x-api-key' (Anthropic-style).",
+    ),
 ) -> None:
     """Store a secret in the OS keychain and mint a token for it."""
+    if auth_style not in store.AUTH_STYLES:
+        typer.echo(
+            f"error: --auth-style must be one of {store.AUTH_STYLES}, got {auth_style!r}",
+            err=True,
+        )
+        raise typer.Exit(2)
     secret = typer.prompt("secret", hide_input=True)
     env_vars = list(env) if env else [f"{name.upper()}_API_KEY"]
     if base_url_env is None:
         base_url_env = f"{name.upper()}_BASE_URL"
     try:
-        entry = store.add_key(name, secret, endpoint, env_vars, base_url_env)
+        entry = store.add_key(name, secret, endpoint, env_vars, base_url_env, auth_style)
     except KeyError as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(1) from None
-    typer.echo(f"added '{entry.name}' -> {entry.endpoint}")
+    typer.echo(f"added '{entry.name}' -> {entry.endpoint} ({entry.auth_style})")
     typer.echo(f"  token:    {entry.token}")
     typer.echo(f"  env vars: {', '.join(entry.env_vars)}")
     if entry.base_url_env:
         typer.echo(f"  base url: {entry.base_url_env}")
+    _hint_restart_if_running()
 
 
 @app.command()
@@ -83,6 +164,7 @@ def rotate(name: str) -> None:
         typer.echo(f"error: no key named '{name}'", err=True)
         raise typer.Exit(1)
     typer.echo(f"rotated secret for '{name}' (token unchanged: {entry.token})")
+    _hint_restart_if_running()
 
 
 @app.command("rm")
@@ -98,6 +180,7 @@ def remove(
         raise typer.Exit(0)
     store.remove_key(name)
     typer.echo(f"removed '{name}'")
+    _hint_restart_if_running()
 
 
 @app.command("list")
@@ -109,7 +192,8 @@ def list_() -> None:
         return
     width = max(len(e.name) for e in entries)
     for e in entries:
-        typer.echo(f"{e.name.ljust(width)}  {e.token}  -> {e.endpoint}")
+        style = f"[{e.auth_style}]" if e.auth_style != "bearer" else ""
+        typer.echo(f"{e.name.ljust(width)}  {e.token}  -> {e.endpoint} {style}".rstrip())
 
 
 @app.command()
@@ -118,7 +202,7 @@ def approve(
     host: str = typer.Argument(..., help="Host to add to this key's allowlist."),
 ) -> None:
     """Add a new host to a key's allowlist. (Multi-endpoint support lands in v0.3.)"""
-    typer.echo(f"TODO: approve {host} for '{name}' (single-endpoint only in v0.1)")
+    typer.echo(f"TODO: approve {host} for '{name}' (single-endpoint only in v0.2)")
 
 
 @app.command()
@@ -128,6 +212,18 @@ def log(
 ) -> None:
     """Tail the audit log."""
     typer.echo(f"TODO: show audit log since={since} key={key}")
+
+
+def _wait_for_daemon(timeout: float = 2.0) -> dict | None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if daemon_file().exists():
+            try:
+                return json.loads(daemon_file().read_text())
+            except json.JSONDecodeError:
+                pass
+        time.sleep(0.05)
+    return None
 
 
 @app.command(
@@ -145,23 +241,15 @@ def run(ctx: typer.Context) -> None:
 
     ensure_dirs()
 
-    daemon_proc = subprocess.Popen([sys.executable, "-m", "keyward.daemon"])
-
-    info = None
-    deadline = time.time() + 2.0
-    while time.time() < deadline:
-        if daemon_file().exists():
-            try:
-                info = json.loads(daemon_file().read_text())
-                break
-            except json.JSONDecodeError:
-                pass
-        time.sleep(0.05)
-
+    info = _live_daemon_info()
+    daemon_proc: subprocess.Popen | None = None
     if info is None:
-        daemon_proc.terminate()
-        typer.echo("error: daemon did not start in time", err=True)
-        raise typer.Exit(1)
+        daemon_proc = subprocess.Popen([sys.executable, "-m", "keyward.daemon"])
+        info = _wait_for_daemon()
+        if info is None:
+            daemon_proc.terminate()
+            typer.echo("error: daemon did not start in time", err=True)
+            raise typer.Exit(1)
 
     daemon_url = f"http://{info['host']}:{info['port']}"
     env = {**os.environ, "KEYWARD_DAEMON": daemon_url}
@@ -174,15 +262,18 @@ def run(ctx: typer.Context) -> None:
     try:
         exit_code = subprocess.run(argv, env=env).returncode
     finally:
-        try:
-            os.kill(info["pid"], signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            daemon_proc.wait(timeout=3.0)
-        except subprocess.TimeoutExpired:
-            daemon_proc.kill()
-            daemon_proc.wait(timeout=1.0)
+        if daemon_proc is not None:
+            # This process started the daemon; clean it up. An existing long-running
+            # daemon (e.g. the LaunchAgent) is left alone.
+            try:
+                os.kill(info["pid"], signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                daemon_proc.wait(timeout=3.0)
+            except subprocess.TimeoutExpired:
+                daemon_proc.kill()
+                daemon_proc.wait(timeout=1.0)
 
     raise typer.Exit(exit_code)
 

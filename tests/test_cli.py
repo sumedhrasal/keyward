@@ -92,3 +92,31 @@ def test_custom_env_var(isolated_env: Path) -> None:
     )
     assert result.exit_code == 0
     assert store.list_keys()[0].env_vars == ["ANTHROPIC_API_KEY"]
+
+
+def test_add_x_api_key_style(isolated_env: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["add", "anthropic", "--endpoint", "api.anthropic.com", "--auth-style", "x-api-key"],
+        input="sk-ant-xxx\n",
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "x-api-key" in result.stdout
+    entry = store.list_keys()[0]
+    assert entry.auth_style == "x-api-key"
+
+
+def test_add_rejects_invalid_auth_style(isolated_env: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["add", "foo", "--endpoint", "api.foo.com", "--auth-style", "basic"],
+        input="secret\n",
+    )
+    assert result.exit_code == 2
+    assert "bearer" in result.stderr
+    assert store.list_keys() == []
+
+
+def test_default_auth_style_is_bearer(isolated_env: Path) -> None:
+    runner.invoke(app, ["add", "openai", "--endpoint", "api.openai.com"], input="sk-x\n")
+    assert store.list_keys()[0].auth_style == "bearer"
