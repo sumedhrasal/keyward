@@ -64,11 +64,59 @@ client = openai.OpenAI()   # reads OPENAI_API_KEY and OPENAI_BASE_URL from env
 Under `keyward run`, those variables point at the local daemon with a token.
 Outside `keyward run`, they are not set at all.
 
-## Status
+## What works today (v0.2)
 
-Design stage. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design,
-threat model, and component breakdown. No implementation yet.
+| Area                  | Status                                                                 |
+|-----------------------|------------------------------------------------------------------------|
+| CLI commands          | `init`, `add`, `list`, `rm`, `rotate`, `restart`, `run` all functional |
+| Keychain storage      | macOS Keychain, Windows Credential Manager, Linux libsecret via `keyring` |
+| Proxy forwarding      | Authorization: Bearer and x-api-key, on both ingress and egress        |
+| Streaming             | Server-Sent Events forwarded without buffering                         |
+| Login agent           | macOS LaunchAgent install/uninstall/kickstart via `keyward init`       |
+| Daemon reuse          | `keyward run` reuses a live daemon; else spawns ephemeral              |
+| Audit log             | Stub only (prints TODO; no log is written yet)                         |
+| Multi-endpoint allowlist | Stub only; each key is pinned to one endpoint in v0.2               |
+| Linux systemd / Windows scheduled task | Not wired up yet                                      |
+| Websocket proxying    | Returns 501; HTTP only for now                                         |
+| Request body streaming| Buffered; fine for LLM chat, not for large uploads                     |
+| Caller attestation    | Trust-anything on localhost; see ARCHITECTURE.md                       |
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design, threat
+model, and the list of deferred items.
+
+## Verifying the key swap
+
+The sharpest test is to point keyward at a request-echoing endpoint and look
+for your raw secret (and the absence of the token) in the response.
+
+```bash
+# pick a distinctive fake secret so you can spot it in the echo
+keyward add echotest --endpoint httpbin.org
+# at the prompt, enter: sk-fake-secret-12345
+
+keyward restart   # only needed if a LaunchAgent daemon is already running
+
+keyward run -- curl -s "$ECHOTEST_BASE_URL/anything" \
+    -H "Authorization: Bearer $ECHOTEST_API_KEY"
+```
+
+In the JSON response, under `headers.Authorization`:
+- `Bearer sk-fake-secret-12345` means the swap worked.
+- Anything starting with `Bearer kw_` means the swap did not happen (bug).
+
+For the Anthropic-style (x-api-key):
+
+```bash
+keyward add echotestx --endpoint httpbin.org --auth-style x-api-key
+keyward restart
+keyward run -- curl -s "$ECHOTESTX_BASE_URL/anything" \
+    -H "x-api-key: $ECHOTESTX_API_KEY"
+```
+
+Check `headers.X-Api-Key` in the response.
+
+Clean up with `keyward rm echotest -y && keyward rm echotestx -y`.
 
 ## License
 
-TBD.
+MIT. See [LICENSE](LICENSE).

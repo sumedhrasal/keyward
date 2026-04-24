@@ -1,5 +1,39 @@
 # keyward architecture
 
+## Implementation status (v0.2)
+
+Shipped and covered by tests:
+
+- CLI: `init`, `add`, `list`, `rm`, `rotate`, `restart`, `run`
+- OS-keychain storage via `keyring` (service name `keyward`, username = key name)
+- Token format: `kw_` + 16 hex chars (~64 bits of entropy)
+- Local aiohttp proxy: Bearer and x-api-key on ingress and egress, SSE
+  streaming via `iter_any()`, 401 on missing token, 403 on unknown token,
+  502 on upstream connect or stream error
+- `keyward init` writes and bootstraps a macOS LaunchAgent
+  (`~/Library/LaunchAgents/com.keyward.daemon.plist`) so the daemon starts
+  at login and caches all registered secrets once, avoiding keychain
+  prompts mid-command. `keyward init --uninstall` reverses it.
+- `keyward run` reuses a live daemon (via PID-alive probe on
+  `daemon.json`) or spawns an ephemeral one and tears it down on exit.
+- `keyward restart` calls `launchctl kickstart -k` when the agent is
+  installed; otherwise SIGTERMs any ephemeral daemon.
+
+Stubbed (command exists, body is a TODO):
+
+- `approve` — multi-host allowlist per key is v0.3 scope
+- `log` — audit log writing is not implemented yet
+
+Not yet wired up:
+
+- Linux: `systemctl --user` unit install in `keyward init`
+- Windows: scheduled task at logon in `keyward init`
+- Audit log file format, rotation, and tail
+- Streaming request bodies (currently buffered)
+- Websocket Upgrade handling (daemon returns 501)
+- Caller attestation (trust-anything on localhost; see v1 decisions)
+- Signed macOS binary (keychain "always allow" doesn't stick for unsigned)
+
 ## Main goal
 
 Let a developer run untrusted code-reading tools (AI agents, linters, third-party
@@ -200,15 +234,38 @@ middle of a `keyward run` invocation.
 
 ## Future improvements
 
-- **Caller attestation.** Add an opt-in strict mode: `keyward run` registers
-  its PID tree with the daemon over a unix socket; the daemon honors tokens
-  only from registered ancestries. Good fit once the v1 surface is stable
-  and a real user has been bitten by an in-repo token leak.
-- **Websocket support.** HTTP Upgrade handshake plus bidirectional byte
-  tunnel, needed once Realtime-style APIs become common in the user's
-  workflow.
-- **Signed/notarized macOS build.** Unsigned binaries prompt the keychain on
-  every daemon restart. A signed `.app` or notarized binary makes
+Ordered roughly by the trigger that would make each one worth doing.
+
+- **SIGHUP reload.** Daemon currently caches secrets at startup; add/rotate/rm
+  require `keyward restart`. A SIGHUP handler that rebuilds the cache from
+  config + keychain would let mutations take effect without a full
+  bounce. Small change; do this before users hit the "I forgot to
+  restart" footgun more than twice.
+- **Audit log.** Append one JSONL record per forwarded request to
+  `~/.local/state/keyward/audit.log` (or Library/Logs on macOS): timestamp,
+  key name, method, host, path, status, byte counts, caller PID and
+  argv[0]. No bodies. Tail with `keyward log`. Required to call this
+  "audited" in the threat model.
+- **Multi-host allowlist per key + approval flow.** Today each key is pinned
+  to one host; `keyward approve` is a stub. Extend `KeyEntry.endpoint` to
+  a list, and on a new destination, prompt the user (desktop notification
+  with TUI fallback) before forwarding. This is the piece that turns
+  "local proxy" into a real policy enforcement point.
+- **Linux systemd and Windows task support.** Same model as the macOS
+  LaunchAgent; need one small install/uninstall per platform. Blocked
+  on someone actually running those platforms; macOS was the priority.
+- **Caller attestation.** Opt-in strict mode: `keyward run` registers its
+  PID tree with the daemon over a unix socket; the daemon honors tokens
+  only from registered ancestries. Good fit once a real user has been
+  bitten by a stray token leak.
+- **Streaming request bodies.** Currently `await request.read()` buffers
+  the whole payload. Fine for chat completions; wrong for multi-MB
+  uploads. Revisit before anyone uses this for audio/image APIs.
+- **Websocket Upgrade support.** HTTP Upgrade handshake plus bidirectional
+  byte tunnel. Needed for OpenAI Realtime and similar.
+- **Per-key rate and budget caps.** Stub exists in the config schema;
+  enforcement in the daemon limits blast radius if an agent goes
+  rogue with a valid token.
+- **Signed/notarized macOS build.** Unsigned binaries prompt the keychain
+  on every daemon restart. A signed `.app` or notarized binary makes
   "always allow" stick. Matters once a wider user base is onboarding.
-- **Per-key rate and budget caps.** Stub exists in config; enforcement in the
-  daemon is a v1.x item.
