@@ -31,13 +31,14 @@ dependencies = [
 keyward = "keyward.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/sumedh/keyward"
-Repository = "https://github.com/sumedh/keyward"
+Homepage = "https://github.com/sumedhrasal/keyward"
+Repository = "https://github.com/sumedhrasal/keyward"
 
 [dependency-groups]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
+    "ruff>=0.6",
 ]
 
 [build-system]
@@ -50,3 +51,14 @@ packages = ["src/keyward"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF", "SIM"]
+# B008: Typer relies on call-in-default for Option/Argument
+# SIM117: nested async with for aiohttp ClientSession+request reads more clearly
+# E501: line length is governed by ruff format, not the linter
+ignore = ["E501", "B008", "SIM117"]

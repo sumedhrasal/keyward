@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import platform
@@ -12,6 +13,7 @@ import typer
 
 from keyward import __version__, agent, store
 from keyward.config import daemon_file, ensure_dirs
+from keyward.discovery import live_daemon_info
 
 app = typer.Typer(
     name="keyward",
@@ -30,34 +32,18 @@ def _version_cb(value: bool) -> None:
 @app.callback()
 def _root(
     version: bool = typer.Option(
-        False, "--version", callback=_version_cb, is_eager=True,
+        False,
+        "--version",
+        callback=_version_cb,
+        is_eager=True,
         help="Show version and exit.",
     ),
 ) -> None:
     pass
 
 
-def _live_daemon_info() -> dict | None:
-    """Return {host, port, pid} if a daemon is running and its PID is alive, else None."""
-    path = daemon_file()
-    if not path.exists():
-        return None
-    try:
-        info = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-    pid = info.get("pid")
-    if not isinstance(pid, int):
-        return None
-    try:
-        os.kill(pid, 0)
-    except (ProcessLookupError, PermissionError):
-        return None
-    return info
-
-
 def _hint_restart_if_running() -> None:
-    if _live_daemon_info() is not None:
+    if live_daemon_info() is not None:
         typer.echo("hint: a daemon is running. Run 'keyward restart' to reload the change.")
 
 
@@ -103,7 +89,7 @@ def restart() -> None:
         agent.restart()
         typer.echo("kickstarted LaunchAgent daemon")
         return
-    info = _live_daemon_info()
+    info = live_daemon_info()
     if info is None:
         typer.echo("no daemon is running")
         return
@@ -119,15 +105,18 @@ def add(
     name: str = typer.Argument(..., help="Short name for this key, e.g. openai."),
     endpoint: str = typer.Option(..., "--endpoint", help="Allowlisted host, e.g. api.openai.com."),
     env: list[str] = typer.Option(
-        None, "--env",
+        None,
+        "--env",
         help="Env var to set to the token (repeatable). Defaults to <NAME>_API_KEY.",
     ),
     base_url_env: str | None = typer.Option(
-        None, "--base-url-env",
+        None,
+        "--base-url-env",
         help="Env var for the base URL pointing at the daemon. Defaults to <NAME>_BASE_URL.",
     ),
     auth_style: str = typer.Option(
-        "bearer", "--auth-style",
+        "bearer",
+        "--auth-style",
         help="Upstream auth style: 'bearer' (OpenAI-style) or 'x-api-key' (Anthropic-style).",
     ),
 ) -> None:
@@ -241,7 +230,7 @@ def run(ctx: typer.Context) -> None:
 
     ensure_dirs()
 
-    info = _live_daemon_info()
+    info = live_daemon_info()
     daemon_proc: subprocess.Popen | None = None
     if info is None:
         daemon_proc = subprocess.Popen([sys.executable, "-m", "keyward.daemon"])
@@ -265,10 +254,8 @@ def run(ctx: typer.Context) -> None:
         if daemon_proc is not None:
             # This process started the daemon; clean it up. An existing long-running
             # daemon (e.g. the LaunchAgent) is left alone.
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 os.kill(info["pid"], signal.SIGTERM)
-            except ProcessLookupError:
-                pass
             try:
                 daemon_proc.wait(timeout=3.0)
             except subprocess.TimeoutExpired:

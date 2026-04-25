@@ -14,8 +14,7 @@ import pytest
 from aiohttp import ClientSession, web
 
 from keyward.config import daemon_file
-from keyward.daemon import create_app
-
+from keyward.daemon import CacheEntry, create_app
 
 # --- helpers ---------------------------------------------------------------
 
@@ -85,7 +84,7 @@ async def test_proxy_swaps_auth_and_forwards_body() -> None:
         return web.json_response({"ok": True})
 
     up_runner, up_base = await _make_upstream(upstream_handler)
-    cache = {"kw_abc123": ("openai", up_base, "sk-real-secret", "bearer")}
+    cache = {"kw_abc123": CacheEntry("openai", up_base, "sk-real-secret", "bearer")}
     daemon_runner, _, daemon_port = await _start_site(create_app(cache))
 
     try:
@@ -114,7 +113,7 @@ async def test_proxy_rejects_missing_bearer() -> None:
         return web.Response(text="should not reach upstream")
 
     up_runner, up_base = await _make_upstream(upstream_handler)
-    cache = {"kw_abc123": ("openai", up_base, "sk-real", "bearer")}
+    cache = {"kw_abc123": CacheEntry("openai", up_base, "sk-real", "bearer")}
     daemon_runner, _, daemon_port = await _start_site(create_app(cache))
 
     try:
@@ -131,7 +130,7 @@ async def test_proxy_rejects_unknown_token() -> None:
     async def upstream_handler(request: web.Request) -> web.Response:
         return web.Response(text="should not reach upstream")
 
-    up_runner, up_base = await _make_upstream(upstream_handler)
+    up_runner, _up_base = await _make_upstream(upstream_handler)
     daemon_runner, _, daemon_port = await _start_site(create_app({}))
 
     try:
@@ -151,9 +150,7 @@ async def test_proxy_streams_sse() -> None:
     chunks = [b"data: one\n\n", b"data: two\n\n", b"data: three\n\n"]
 
     async def upstream_handler(request: web.Request) -> web.StreamResponse:
-        resp = web.StreamResponse(
-            status=200, headers={"Content-Type": "text/event-stream"}
-        )
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
         await resp.prepare(request)
         for c in chunks:
             await resp.write(c)
@@ -162,7 +159,7 @@ async def test_proxy_streams_sse() -> None:
         return resp
 
     up_runner, up_base = await _make_upstream(upstream_handler)
-    cache = {"kw_stream": ("openai", up_base, "sk-real", "bearer")}
+    cache = {"kw_stream": CacheEntry("openai", up_base, "sk-real", "bearer")}
     daemon_runner, _, daemon_port = await _start_site(create_app(cache))
 
     try:
@@ -192,7 +189,7 @@ async def test_proxy_x_api_key_in_and_out() -> None:
         return web.json_response({"ok": True})
 
     up_runner, up_base = await _make_upstream(upstream_handler)
-    cache = {"kw_ant1": ("anthropic", up_base, "sk-ant-real", "x-api-key")}
+    cache = {"kw_ant1": CacheEntry("anthropic", up_base, "sk-ant-real", "x-api-key")}
     daemon_runner, _, daemon_port = await _start_site(create_app(cache))
 
     try:
@@ -225,7 +222,7 @@ async def test_proxy_bearer_incoming_x_api_key_entry() -> None:
         return web.json_response({"ok": True})
 
     up_runner, up_base = await _make_upstream(upstream_handler)
-    cache = {"kw_ant2": ("anthropic", up_base, "sk-ant-real", "x-api-key")}
+    cache = {"kw_ant2": CacheEntry("anthropic", up_base, "sk-ant-real", "x-api-key")}
     daemon_runner, _, daemon_port = await _start_site(create_app(cache))
 
     try:
@@ -251,7 +248,7 @@ async def test_proxy_forwards_upstream_error_status() -> None:
         return web.json_response({"error": "invalid_api_key"}, status=401)
 
     up_runner, up_base = await _make_upstream(upstream_handler)
-    cache = {"kw_bad": ("openai", up_base, "sk-wrong", "bearer")}
+    cache = {"kw_bad": CacheEntry("openai", up_base, "sk-wrong", "bearer")}
     daemon_runner, _, daemon_port = await _start_site(create_app(cache))
 
     try:

@@ -58,15 +58,19 @@ single script. Every operation below must finish in one short command.
 |--------------------------------------------------|-----------------------------------------|
 | Reads source files, .env, config                 | Sees tokens only, no real keys          |
 | Reads process environment of the app             | Sees tokens only                        |
-| Calls the local daemon with a token              | Only allowlisted destinations forwarded |
-| Calls daemon, picks a new destination            | Blocked pending user approval           |
+| Calls the local daemon with a token              | Forwarded only to the stored endpoint — token cannot be aimed at a different host |
+| Calls daemon, picks a new destination            | **v0.2: request still goes to the stored endpoint** (multi-host allowlist is v0.3) |
+| Calls daemon, picks a new destination (v0.3+)    | Blocked pending user approval           |
 | Reads the OS keychain (requires user auth)       | Wins; this is the trust boundary        |
 | Has root / can ptrace the daemon                 | Wins; out of scope                      |
 
 The core insight: a local proxy on its own does not help, because a local agent
-can call the proxy too. The value comes from the **allowlist** and the
-**approval prompt on new destinations**. Those turn the proxy from a lookup
-table into a policy enforcement point.
+can call the proxy too. The value comes from the **per-token endpoint binding**
+and, once v0.3 lands, the **approval prompt on new destinations**. In v0.2 each
+token is locked to exactly one host at registration time; the daemon ignores the
+request's target host entirely and always forwards to the stored endpoint. The
+multi-host allowlist (expandable via `keyward approve`) and the interactive
+approval flow are deferred to v0.3.
 
 ## System overview
 
@@ -114,7 +118,13 @@ written to `~/.config/keyward/daemon.json`. Responsibilities:
 Manager, libsecret on Linux). The daemon is the only process that reads it.
 
 **Config** - `~/.config/keyward/config.toml`. Plaintext is fine: it holds
-tokens, allowlists, and metadata, but no secrets. Example entry:
+tokens, allowlists, and metadata, but no secrets. The daemon trusts this file
+as authoritative — anyone who can write to it can redirect a key's traffic to
+a host they control. Treat write access to `config.toml` as equivalent to
+holding the keychain password; this is consistent with the threat-model row
+"reads the OS keychain (requires user auth) - wins". As defense in depth, the
+daemon and `keyward add` both reject endpoints whose scheme is not `http://`
+or `https://`. Example entry:
 
 ```toml
 [keys.openai]

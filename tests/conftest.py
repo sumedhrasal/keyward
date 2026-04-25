@@ -25,7 +25,12 @@ class InMemoryKeyring(KeyringBackend):
 
 @pytest.fixture
 def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect XDG dirs and swap in an in-memory keyring so tests never touch the real keychain."""
+    """Redirect Path.home(), XDG dirs, and the keyring so tests never touch real state.
+
+    Returns the tmp_path that everything has been redirected into; any test that
+    needs a sandbox home/config/state/keychain should request this fixture.
+    """
+    monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     keyring.set_keyring(InMemoryKeyring())

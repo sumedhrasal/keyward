@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import secrets
 import tomllib
@@ -21,6 +22,14 @@ def config_file() -> Path:
 
 
 AUTH_STYLES = ("bearer", "x-api-key")
+ALLOWED_SCHEMES = ("http", "https")
+
+
+def _validate_endpoint(endpoint: str) -> None:
+    if "://" in endpoint:
+        scheme = endpoint.split("://", 1)[0].lower()
+        if scheme not in ALLOWED_SCHEMES:
+            raise ValueError(f"endpoint scheme must be one of {ALLOWED_SCHEMES}, got {scheme!r}")
 
 
 @dataclass
@@ -105,6 +114,7 @@ def add_key(
 ) -> KeyEntry:
     if auth_style not in AUTH_STYLES:
         raise ValueError(f"auth_style must be one of {AUTH_STYLES}, got {auth_style!r}")
+    _validate_endpoint(endpoint)
     if get_key(name) is not None:
         raise KeyError(f"key '{name}' already exists; use 'keyward rotate' to change its secret")
     keyring.set_password(KEYCHAIN_SERVICE, name, secret)
@@ -130,10 +140,8 @@ def remove_key(name: str) -> bool:
         return False
     del keys[name]
     _save_raw(data)
-    try:
+    with contextlib.suppress(keyring.errors.PasswordDeleteError):
         keyring.delete_password(KEYCHAIN_SERVICE, name)
-    except keyring.errors.PasswordDeleteError:
-        pass
     return True
 
 

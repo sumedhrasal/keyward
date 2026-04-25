@@ -64,6 +64,49 @@ client = openai.OpenAI()   # reads OPENAI_API_KEY and OPENAI_BASE_URL from env
 Under `keyward run`, those variables point at the local daemon with a token.
 Outside `keyward run`, they are not set at all.
 
+## Activating from inside your app
+
+If you don't want to wrap every command with `keyward run`, call
+`keyward.activate()` once near the top of your app. With the daemon installed
+as a login agent (`keyward init`), this is all you need:
+
+```python
+# .env (or your normal env-loading mechanism)
+# OPENAI_API_KEY=kw_ab12cd34
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+import keyward
+keyward.activate()       # rewrites OPENAI_BASE_URL to point at the daemon
+
+from openai import OpenAI
+client = OpenAI()        # transparently goes through keyward
+```
+
+`activate()` looks at every registered key, and for each one whose `env_vars`
+already hold its token in `os.environ`, sets the matching `base_url_env` to the
+daemon URL. Real keys are left alone. It also exports `KEYWARD_DAEMON` as a
+stable signal you can check from your code (`if "KEYWARD_DAEMON" in os.environ:
+...`) to confirm activation.
+
+It returns a `keyward.ActivateResult` with three lists so you can see exactly
+what happened:
+
+```python
+result = keyward.activate(strict=False)
+if result.skipped_no_env:
+    print(f"token not found in env for: {result.skipped_no_env}")
+    print("Did you load your .env file before calling activate()?")
+# result.activated       — keys that are now routing through the daemon
+# result.skipped_no_env  — keys whose token was not found in any env var
+# result.skipped_no_base_url — keys with no base_url_env configured
+```
+
+If no daemon is running, `activate()` raises `keyward.DaemonNotRunning`. Pass
+`strict=False` to return an empty result instead — useful for code that should
+work both with and without keyward installed.
+
 ## What works today (v0.2)
 
 | Area                  | Status                                                                 |
@@ -75,7 +118,8 @@ Outside `keyward run`, they are not set at all.
 | Login agent           | macOS LaunchAgent install/uninstall/kickstart via `keyward init`       |
 | Daemon reuse          | `keyward run` reuses a live daemon; else spawns ephemeral              |
 | Audit log             | Stub only (prints TODO; no log is written yet)                         |
-| Multi-endpoint allowlist | Stub only; each key is pinned to one endpoint in v0.2               |
+| Endpoint enforcement  | Each token is bound to one host at `keyward add` time; the daemon ignores the request host and always forwards to the stored endpoint — so a token cannot be used against a different host |
+| Multi-endpoint allowlist + approval flow | Not yet — v0.3 scope; see ARCHITECTURE.md   |
 | Linux systemd / Windows scheduled task | Not wired up yet                                      |
 | Websocket proxying    | Returns 501; HTTP only for now                                         |
 | Request body streaming| Buffered; fine for LLM chat, not for large uploads                     |
@@ -116,6 +160,14 @@ keyward run -- curl -s "$ECHOTESTX_BASE_URL/anything" \
 Check `headers.X-Api-Key` in the response.
 
 Clean up with `keyward rm echotest -y && keyward rm echotestx -y`.
+
+There is also a Python equivalent that uses `keyward.activate()`:
+
+```bash
+keyward add echotest --endpoint httpbin.org
+keyward restart
+uv run python scripts/verify_swap.py echotest
+```
 
 ## License
 

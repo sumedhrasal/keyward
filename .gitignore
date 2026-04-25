@@ -26,3 +26,4 @@ htmlcov/
 audit.log
 keyward.sock
 config.toml
+.remember

@@ -60,9 +60,7 @@ def test_add_list_rm_cycle(isolated_env: Path) -> None:
 
 def test_add_rejects_duplicate(isolated_env: Path) -> None:
     runner.invoke(app, ["add", "openai", "--endpoint", "api.openai.com"], input="sk-a\n")
-    result = runner.invoke(
-        app, ["add", "openai", "--endpoint", "api.openai.com"], input="sk-b\n"
-    )
+    result = runner.invoke(app, ["add", "openai", "--endpoint", "api.openai.com"], input="sk-b\n")
     assert result.exit_code == 1
     assert "already exists" in result.stderr
 

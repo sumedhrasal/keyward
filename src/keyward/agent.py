@@ -17,6 +17,8 @@ def log_dir() -> Path:
 
 
 def _uid() -> int:
+    if not hasattr(os, "getuid"):
+        raise RuntimeError("LaunchAgent install is macOS-only; not supported on this OS.")
     return os.getuid()
 
 

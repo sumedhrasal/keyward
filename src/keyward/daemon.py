@@ -7,6 +7,7 @@ import os
 import signal
 import socket
 import sys
+from typing import NamedTuple
 
 from aiohttp import ClientError, ClientSession, web
 
@@ -15,11 +16,15 @@ from keyward.config import daemon_file, ensure_dirs
 
 logger = logging.getLogger("keyward.daemon")
 
-CacheEntry = tuple[str, str, str, str]  # (name, endpoint, secret, auth_style)
 
-CACHE_KEY: web.AppKey[dict[str, CacheEntry]] = web.AppKey(
-    "cache", dict[str, CacheEntry]
-)
+class CacheEntry(NamedTuple):
+    name: str
+    endpoint: str
+    secret: str
+    auth_style: str
+
+
+CACHE_KEY: web.AppKey[dict[str, CacheEntry]] = web.AppKey("cache", dict[str, CacheEntry])
 CLIENT_KEY: web.AppKey[ClientSession] = web.AppKey("client", ClientSession)
 
 # Hop-by-hop headers (RFC 2616) plus auth headers we rewrite ourselves.
@@ -43,7 +48,7 @@ HOP_BY_HOP = {
 def _extract_token(request: web.Request) -> str | None:
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
-        candidate = auth[len("Bearer "):].strip()
+        candidate = auth[len("Bearer ") :].strip()
         if candidate.startswith("kw_"):
             return candidate
     candidate = request.headers.get("x-api-key", "").strip()
@@ -61,27 +66,26 @@ async def handle(request: web.Request) -> web.StreamResponse:
         )
 
     cache = request.app[CACHE_KEY]
-    tup = cache.get(token)
-    if tup is None:
+    entry = cache.get(token)
+    if entry is None:
         return web.Response(status=403, text="unknown token\n")
-    name, endpoint, secret, auth_style = tup
 
-    base = endpoint if "://" in endpoint else f"https://{endpoint}"
+    base = entry.endpoint if "://" in entry.endpoint else f"https://{entry.endpoint}"
+    if not (base.startswith("https://") or base.startswith("http://")):
+        # Defense in depth: reject unexpected schemes even if config.toml was tampered with.
+        logger.error("rejecting non-http(s) endpoint for '%s'", entry.name)
+        return web.Response(status=502, text="invalid upstream scheme\n")
     target_url = f"{base}{request.path_qs}"
 
-    out_headers = {
-        k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP
-    }
-    if auth_style == "x-api-key":
-        out_headers["x-api-key"] = secret
+    out_headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
+    if entry.auth_style == "x-api-key":
+        out_headers["x-api-key"] = entry.secret
     else:
-        out_headers["Authorization"] = f"Bearer {secret}"
+        out_headers["Authorization"] = f"Bearer {entry.secret}"
 
     body = await request.read()
 
-    logger.info(
-        "%s %s -> %s [%s]", request.method, request.path, endpoint, name
-    )
+    logger.info("%s %s -> %s [%s]", request.method, request.path, entry.endpoint, entry.name)
 
     client = request.app[CLIENT_KEY]
     try:
@@ -99,9 +103,7 @@ async def handle(request: web.Request) -> web.StreamResponse:
     try:
         async with upstream_cm as upstream:
             resp_headers = {
-                k: v
-                for k, v in upstream.headers.items()
-                if k.lower() not in HOP_BY_HOP
+                k: v for k, v in upstream.headers.items() if k.lower() not in HOP_BY_HOP
             }
             resp = web.StreamResponse(status=upstream.status, headers=resp_headers)
             await resp.prepare(request)
@@ -122,7 +124,7 @@ def build_cache() -> dict[str, CacheEntry]:
         if s is None:
             logger.warning("no keychain entry for '%s'; skipping", entry.name)
             continue
-        cache[entry.token] = (entry.name, entry.endpoint, s, entry.auth_style)
+        cache[entry.token] = CacheEntry(entry.name, entry.endpoint, s, entry.auth_style)
     return cache
 
 
@@ -158,9 +160,7 @@ async def _run() -> None:
     site = web.SockSite(runner, sock)
     await site.start()
 
-    daemon_file().write_text(
-        json.dumps({"host": host, "port": port, "pid": os.getpid()})
-    )
+    daemon_file().write_text(json.dumps({"host": host, "port": port, "pid": os.getpid()}))
     logger.info("listening on %s:%d (%d keys cached)", host, port, len(cache))
 
     stop = asyncio.Event()
