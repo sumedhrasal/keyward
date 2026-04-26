@@ -4,7 +4,7 @@
 
 If you believe you've found a security issue in keyward, please do **not** open
 a public GitHub issue. Instead, email the maintainer at
-**no.reply.newsletter.s1@gmail.com** with:
+**srasal3@gatech.edu** with:
 
 - a description of the issue,
 - the keyward version (`keyward --version`) and your OS,
