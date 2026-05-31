@@ -27,6 +27,9 @@ dependencies = [
     "tomli-w>=1.0",
 ]
 
+[project.optional-dependencies]
+linux = ["secretstorage>=3.3"]
+
 [project.scripts]
 keyward = "keyward.cli:app"
 

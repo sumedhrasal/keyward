@@ -54,17 +54,24 @@ def init(
     """Create config/state dirs and install the daemon as a login agent."""
     ensure_dirs()
 
+    system = platform.system()
+
     if uninstall:
-        if platform.system() != "Darwin":
-            typer.echo("uninstalling a login agent is only wired up for macOS in v0.2", err=True)
+        if system == "Darwin":
+            removed = agent.uninstall()
+            typer.echo("removed LaunchAgent" if removed else "no LaunchAgent was installed")
+        elif system == "Linux":
+            from keyward import agent_linux
+
+            removed = agent_linux.uninstall()
+            typer.echo("removed systemd user unit" if removed else "no systemd unit was installed")
+        else:
+            typer.echo(f"uninstall not supported on {system}", err=True)
             raise typer.Exit(1)
-        removed = agent.uninstall()
-        typer.echo("removed LaunchAgent" if removed else "no LaunchAgent was installed")
         return
 
     typer.echo(f"config dir ready: {daemon_file().parent}")
 
-    system = platform.system()
     if system == "Darwin":
         try:
             path = agent.install(sys.executable)
@@ -74,9 +81,18 @@ def init(
         typer.echo(f"installed LaunchAgent at {path}")
         typer.echo("daemon will start at login (and is running now).")
     elif system == "Linux":
-        typer.echo("TODO: systemd user-unit install (Linux) lands in v0.2.1")
+        from keyward import agent_linux
+
+        try:
+            path = agent_linux.install(sys.executable)
+        except subprocess.CalledProcessError as e:
+            typer.echo(f"error: {e}", err=True)
+            raise typer.Exit(1) from None
+        typer.echo(f"installed systemd user unit at {path}")
+        typer.echo("daemon will start at login (and is running now).")
+        typer.echo("hint: to view logs run 'journalctl --user -u keyward -f'")
     elif system == "Windows":
-        typer.echo("TODO: scheduled-task install (Windows) lands in v0.2.1")
+        typer.echo("TODO: scheduled-task install (Windows) lands in a future release")
     else:
         typer.echo(f"unsupported platform: {system}", err=True)
         raise typer.Exit(1)
@@ -89,6 +105,13 @@ def restart() -> None:
         agent.restart()
         typer.echo("kickstarted LaunchAgent daemon")
         return
+    if platform.system() == "Linux":
+        from keyward import agent_linux
+
+        if agent_linux.is_installed():
+            agent_linux.restart()
+            typer.echo("restarted systemd user unit")
+            return
     info = live_daemon_info()
     if info is None:
         typer.echo("no daemon is running")
