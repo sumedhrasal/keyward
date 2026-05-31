@@ -1,6 +1,6 @@
 [project]
 name = "keyward"
-version = "0.0.1"
+version = "1.0.0"
 description = "Local secret broker that keeps API keys out of files AI agents can read."
 readme = "README.md"
 license = { file = "LICENSE" }
