@@ -5,6 +5,7 @@ Secrets are stored in ~/.config/keyward/secrets.enc, encrypted with Fernet using
 a key derived from the master password via PBKDF2-SHA256 (480k iterations).
 A 16-byte random salt is prepended to the ciphertext and reused across writes.
 """
+
 from __future__ import annotations
 
 import base64
