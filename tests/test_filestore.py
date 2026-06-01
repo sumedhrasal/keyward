@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("cryptography")
+
 from keyward import filestore
 
 

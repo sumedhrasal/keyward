@@ -12,17 +12,22 @@ import base64
 import json
 import os
 
-from cryptography.fernet import Fernet, InvalidToken
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-
 from keyward.config import config_dir
 
 _ITERATIONS = 480_000
 _SALT_LEN = 16
 
 
-def _fernet(salt: bytes) -> Fernet:
+def _fernet(salt: bytes):  # -> Fernet
+    try:
+        from cryptography.fernet import Fernet
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    except ImportError as e:
+        raise RuntimeError(
+            "cryptography is required for the file-based backend. "
+            "Install it with: pip install 'keyward[linux]'"
+        ) from e
     password = os.environ["KEYWARD_MASTER_PASSWORD"].encode()
     kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=_ITERATIONS)
     key = base64.urlsafe_b64encode(kdf.derive(password))
@@ -40,6 +45,8 @@ def _load() -> dict[str, str]:
     raw = p.read_bytes()
     salt, ciphertext = raw[:_SALT_LEN], raw[_SALT_LEN:]
     try:
+        from cryptography.fernet import InvalidToken
+
         data = _fernet(salt).decrypt(ciphertext)
     except InvalidToken as e:
         raise RuntimeError("KEYWARD_MASTER_PASSWORD is wrong or the secrets file is corrupt") from e
