@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import os
 import secrets
 import tomllib
 from dataclasses import dataclass, field
@@ -15,6 +16,47 @@ import tomli_w
 from keyward.config import config_dir, ensure_dirs
 
 KEYCHAIN_SERVICE = "keyward"
+
+
+def _use_filestore() -> bool:
+    return bool(os.environ.get("KEYWARD_MASTER_PASSWORD"))
+
+
+def _set_secret(name: str, secret: str) -> None:
+    if _use_filestore():
+        from keyward import filestore
+
+        filestore.set_password(KEYCHAIN_SERVICE, name, secret)
+        return
+    try:
+        keyring.set_password(KEYCHAIN_SERVICE, name, secret)
+    except keyring.errors.KeyringLocked as e:
+        raise RuntimeError(
+            "system keyring is locked. Set KEYWARD_MASTER_PASSWORD to use the encrypted file backend instead."
+        ) from e
+
+
+def _get_secret(name: str) -> str | None:
+    if _use_filestore():
+        from keyward import filestore
+
+        return filestore.get_password(KEYCHAIN_SERVICE, name)
+    try:
+        return keyring.get_password(KEYCHAIN_SERVICE, name)
+    except keyring.errors.KeyringLocked as e:
+        raise RuntimeError(
+            "system keyring is locked. Set KEYWARD_MASTER_PASSWORD to use the encrypted file backend instead."
+        ) from e
+
+
+def _delete_secret(name: str) -> None:
+    if _use_filestore():
+        from keyward import filestore
+
+        filestore.delete_password(KEYCHAIN_SERVICE, name)
+        return
+    with contextlib.suppress(keyring.errors.PasswordDeleteError):
+        keyring.delete_password(KEYCHAIN_SERVICE, name)
 
 
 def config_file() -> Path:
@@ -117,7 +159,7 @@ def add_key(
     _validate_endpoint(endpoint)
     if get_key(name) is not None:
         raise KeyError(f"key '{name}' already exists; use 'keyward rotate' to change its secret")
-    keyring.set_password(KEYCHAIN_SERVICE, name, secret)
+    _set_secret(name, secret)
     entry = KeyEntry(
         name=name,
         token=mint_token(),
@@ -140,8 +182,7 @@ def remove_key(name: str) -> bool:
         return False
     del keys[name]
     _save_raw(data)
-    with contextlib.suppress(keyring.errors.PasswordDeleteError):
-        keyring.delete_password(KEYCHAIN_SERVICE, name)
+    _delete_secret(name)
     return True
 
 
@@ -149,9 +190,9 @@ def rotate_secret(name: str, new_secret: str) -> KeyEntry | None:
     entry = get_key(name)
     if entry is None:
         return None
-    keyring.set_password(KEYCHAIN_SERVICE, name, new_secret)
+    _set_secret(name, new_secret)
     return entry
 
 
 def read_secret(name: str) -> str | None:
-    return keyring.get_password(KEYCHAIN_SERVICE, name)
+    return _get_secret(name)

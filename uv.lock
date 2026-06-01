@@ -503,7 +503,7 @@ wheels = [
 
 [[package]]
 name = "keyward"
-version = "1.0.0"
+version = "1.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -514,6 +514,7 @@ dependencies = [
 
 [package.optional-dependencies]
 linux = [
+    { name = "cryptography" },
     { name = "secretstorage" },
 ]
 
@@ -527,6 +528,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9" },
+    { name = "cryptography", marker = "extra == 'linux'", specifier = ">=42" },
     { name = "keyring", specifier = ">=24.0" },
     { name = "secretstorage", marker = "extra == 'linux'", specifier = ">=3.3" },
     { name = "tomli-w", specifier = ">=1.0" },
