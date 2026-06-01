@@ -156,7 +156,7 @@ def add(
         base_url_env = f"{name.upper()}_BASE_URL"
     try:
         entry = store.add_key(name, secret, endpoint, env_vars, base_url_env, auth_style)
-    except KeyError as e:
+    except (KeyError, RuntimeError) as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(1) from None
     typer.echo(f"added '{entry.name}' -> {entry.endpoint} ({entry.auth_style})")
@@ -171,7 +171,11 @@ def add(
 def rotate(name: str) -> None:
     """Replace the secret for an existing token. Token stays the same."""
     secret = typer.prompt("new secret", hide_input=True)
-    entry = store.rotate_secret(name, secret)
+    try:
+        entry = store.rotate_secret(name, secret)
+    except RuntimeError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1) from None
     if entry is None:
         typer.echo(f"error: no key named '{name}'", err=True)
         raise typer.Exit(1)

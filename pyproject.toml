@@ -1,6 +1,6 @@
 [project]
 name = "keyward"
-version = "1.1.0"
+version = "1.1.1"
 description = "Local secret broker that keeps API keys out of files AI agents can read."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -28,7 +28,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-linux = ["secretstorage>=3.3"]
+linux = [
+    "secretstorage>=3.3",
+    "cryptography>=42",
+]
 
 [project.scripts]
 keyward = "keyward.cli:app"
